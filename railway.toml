@@ -1,0 +1,11 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "./kiro-rs -c /app/config/config.json --credentials /app/config/credentials.json"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
+
+# Railway 会自动注入 PORT 环境变量，但我们的应用目前不读取它
+# 需要通过 config.json 或修改代码来支持

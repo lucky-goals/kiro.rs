@@ -1,0 +1,44 @@
+# Railway 构建时忽略的文件
+
+# Git
+.git/
+.gitignore
+
+# 本地开发数据
+data/
+*.db
+*.jsonl
+config.json
+credentials.json
+client_api_keys.json
+kiro_stats.json
+kiro_balance_cache.json
+proxy_pool.json
+cache_metering.json
+
+# Rust 构建产物（本地）
+target/
+Cargo.lock
+
+# Node/前端（已在 Dockerfile 中处理）
+admin-ui/node_modules/
+admin-ui/dist/
+
+# 文档
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# 其他
+*.log
+*.bak
+*.backup

@@ -44,10 +44,26 @@ async fn main() {
     ensure_config_files(&config_path, &credentials_path);
 
     // 加载配置
-    let config = Config::load(&config_path).unwrap_or_else(|e| {
+    let mut config = Config::load(&config_path).unwrap_or_else(|e| {
         tracing::error!("加载配置失败: {}", e);
         std::process::exit(1);
     });
+
+    // Railway 支持：优先从环境变量读取 PORT（Railway 自动注入）
+    if let Ok(port_str) = std::env::var("PORT") {
+        if let Ok(port) = port_str.parse::<u16>() {
+            tracing::info!("检测到 PORT 环境变量，使用端口: {}", port);
+            config.port = port;
+        }
+    }
+
+    // Railway/容器支持：优先从环境变量读取 HOST
+    if let Ok(host) = std::env::var("HOST") {
+        if !host.trim().is_empty() {
+            tracing::info!("检测到 HOST 环境变量，使用监听地址: {}", host);
+            config.host = host;
+        }
+    }
 
     // 加载凭证（支持单对象或数组格式）
     let credentials_config = CredentialsConfig::load(&credentials_path).unwrap_or_else(|e| {

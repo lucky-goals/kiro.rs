@@ -64,6 +64,14 @@
 <a id="quick-start"></a>
 ## 🚀 快速开始
 
+### Railway（云端一键部署）
+
+推荐使用 Railway 进行云端部署，无需自己维护服务器：
+
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/new)
+
+详细步骤见 [Railway 部署指南](RAILWAY_DEPLOY.md)。
+
 ### Docker
 
 推荐生产部署使用 Docker。仓库提供的 `docker-compose.yml` 默认使用 Docker Hub 镜像：
