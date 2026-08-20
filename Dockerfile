@@ -24,7 +24,8 @@ RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=builder /app/target/release/kiro-rs /app/kiro-rs
 
-VOLUME ["/app/config"]
+# Railway 使用自己的 Volume 系统，不需要 VOLUME 指令
+# 在 Railway Dashboard 中手动添加 Volume，挂载点为 /app/config
 
 EXPOSE 8990
 
