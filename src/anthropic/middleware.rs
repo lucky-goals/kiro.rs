@@ -17,6 +17,7 @@ use crate::common::auth;
 use crate::kiro::provider::KiroProvider;
 
 use super::cache_metering::SharedCacheMeter;
+use super::session_uuid::SessionUuidStore;
 use super::types::ErrorResponse;
 
 /// 命中的鉴权上下文（注入到请求扩展，供 handler 记录用量）
@@ -50,6 +51,8 @@ pub struct AppState {
     pub cache_meter: Option<SharedCacheMeter>,
     /// 请求链路追踪存储（SQLite，可选）
     pub trace_store: Option<SharedTraceStore>,
+    /// Session UUID 存储（内存 + JSON 持久化）
+    pub session_uuid_store: Option<Arc<SessionUuidStore>>,
 }
 
 impl AppState {
@@ -68,6 +71,7 @@ impl AppState {
             usage_aggregator: None,
             cache_meter: None,
             trace_store: None,
+            session_uuid_store: None,
         }
     }
 
@@ -99,6 +103,12 @@ impl AppState {
     /// 注入链路追踪存储
     pub fn with_trace_store(mut self, store: Option<SharedTraceStore>) -> Self {
         self.trace_store = store;
+        self
+    }
+
+    /// 注入 Session UUID 存储
+    pub fn with_session_uuid_store(mut self, store: Option<Arc<SessionUuidStore>>) -> Self {
+        self.session_uuid_store = store;
         self
     }
 }

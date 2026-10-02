@@ -28,6 +28,7 @@ use chrono::Utc;
 use futures::{Stream, StreamExt, stream};
 use serde_json::json;
 use std::time::Duration;
+
 use tokio::time::interval;
 use uuid::Uuid;
 
@@ -132,6 +133,7 @@ pub(crate) struct RequestTracer {
     key_source: TraceKeySource,
     model: String,
     is_stream: bool,
+    session_id: Option<String>,
     started_at: Instant,
     /// 首个上游 chunk 到达时刻（仅流式标记；取第一次）
     first_token_at: parking_lot::Mutex<Option<Instant>>,
@@ -159,6 +161,7 @@ struct RequestTraceOptions {
     key_ctx: KeyContext,
     model: String,
     is_stream: bool,
+    session_id: Option<String>,
 }
 
 impl RequestTracer {
@@ -171,6 +174,7 @@ impl RequestTracer {
             key_source: options.key_ctx.key_source,
             model: options.model,
             is_stream: options.is_stream,
+            session_id: options.session_id,
             started_at: Instant::now(),
             first_token_at: parking_lot::Mutex::new(None),
             attempts: parking_lot::Mutex::new(Vec::new()),
@@ -225,6 +229,7 @@ impl RequestTracer {
             cache_read_tokens: usage.cache_read_tokens,
             credits: usage.credits,
             first_token_ms,
+            session_id: self.session_id.clone(),
             attempts,
         };
         store.insert(&rec);
@@ -608,6 +613,7 @@ pub async fn get_models(
 pub async fn post_messages(
     State(state): State<AppState>,
     Extension(key_ctx): Extension<KeyContext>,
+    headers: axum::http::HeaderMap,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
     // Count the image budget on inbound to provide precise diagnostics for later context-window-full errors
@@ -633,6 +639,66 @@ pub async fn post_messages(
         );
     }
     let hook = UsageRecordHook::from_state(&state, key_ctx.key_id, payload.model.clone());
+
+    // 解析 session UUID
+    let session_uuid_result = if let Some(store) = &state.session_uuid_store {
+        // 读取配置参数（对齐 Python 的 business_defaults 和 settings）
+        let content_fallback_enabled = std::env::var("SESSION_ID_CONTENT_FALLBACK_ENABLED")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(true); // 默认启用，对齐 Python
+        let derivation_secret = std::env::var("SESSION_ID_DERIVATION_SECRET").ok();
+        let ttl_seconds = std::env::var("ROUTING_STATE_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1800); // 默认 1800 秒，对齐 Python
+
+        // 从 Authorization header 派生 auth_namespace（取 API key 前 8 字符）
+        let auth_namespace = headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|auth| {
+                auth.strip_prefix("Bearer ")
+                    .or_else(|| auth.strip_prefix("bearer "))
+            })
+            .map(|key| {
+                if key.len() >= 8 {
+                    &key[..8]
+                } else {
+                    key
+                }
+            });
+
+        // 将 payload 转为 JSON Value
+        let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+
+        super::session_uuid::resolve_session_uuid_from_request(
+            &headers,
+            &payload_json,
+            Some(store.as_ref()),
+            content_fallback_enabled,
+            derivation_secret.as_deref(),
+            auth_namespace,
+            ttl_seconds,
+        )
+    } else {
+        super::session_uuid::SessionUuidResult {
+            session_id: None,
+            source: "disabled".to_string(),
+            original_value: None,
+        }
+    };
+
+    // 记录 session UUID 解析结果
+    if let Some(session_id) = &session_uuid_result.session_id {
+        tracing::debug!(
+            session_id = %session_id,
+            source = %session_uuid_result.source,
+            original_value = ?session_uuid_result.original_value,
+            "Session UUID resolved"
+        );
+    }
+
     // 检查 KiroProvider 是否可用
     let provider = match &state.kiro_provider {
         Some(p) => p.clone(),
@@ -695,6 +761,7 @@ pub async fn post_messages(
                 key_ctx: key_ctx.clone(),
                 model: payload.model.clone(),
                 is_stream: payload_stream,
+                session_id: session_uuid_result.session_id.clone(),
             },
         ));
         return super::websearch_loop::run_web_search_loop(
@@ -796,6 +863,7 @@ pub async fn post_messages(
                 key_ctx: key_ctx.clone(),
                 model: payload.model.clone(),
                 is_stream: true,
+                session_id: session_uuid_result.session_id.clone(),
             },
         ));
         handle_stream_request(
@@ -821,6 +889,7 @@ pub async fn post_messages(
                 key_ctx: key_ctx.clone(),
                 model: payload.model.clone(),
                 is_stream: false,
+                session_id: session_uuid_result.session_id.clone(),
             },
         ));
         handle_non_stream_request(
@@ -1538,6 +1607,7 @@ pub async fn count_tokens(
 pub async fn post_messages_cc(
     State(state): State<AppState>,
     Extension(key_ctx): Extension<KeyContext>,
+    headers: axum::http::HeaderMap,
     JsonExtractor(mut payload): JsonExtractor<MessagesRequest>,
 ) -> Response {
     tracing::info!(
@@ -1551,6 +1621,62 @@ pub async fn post_messages_cc(
         return (StatusCode::BAD_REQUEST, Json(error)).into_response();
     }
     let hook = UsageRecordHook::from_state(&state, key_ctx.key_id, payload.model.clone());
+
+    // 解析 session UUID
+    let session_uuid_result = if let Some(store) = &state.session_uuid_store {
+        let content_fallback_enabled = std::env::var("SESSION_ID_CONTENT_FALLBACK_ENABLED")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(true);
+        let derivation_secret = std::env::var("SESSION_ID_DERIVATION_SECRET").ok();
+        let ttl_seconds = std::env::var("ROUTING_STATE_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1800);
+
+        let auth_namespace = headers
+            .get(http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|auth| {
+                auth.strip_prefix("Bearer ")
+                    .or_else(|| auth.strip_prefix("bearer "))
+            })
+            .map(|key| {
+                if key.len() >= 8 {
+                    &key[..8]
+                } else {
+                    key
+                }
+            });
+
+        let payload_json = serde_json::to_value(&payload).unwrap_or(serde_json::Value::Null);
+
+        super::session_uuid::resolve_session_uuid_from_request(
+            &headers,
+            &payload_json,
+            Some(store.as_ref()),
+            content_fallback_enabled,
+            derivation_secret.as_deref(),
+            auth_namespace,
+            ttl_seconds,
+        )
+    } else {
+        super::session_uuid::SessionUuidResult {
+            session_id: None,
+            source: "disabled".to_string(),
+            original_value: None,
+        }
+    };
+
+    // 记录 session UUID 解析结果
+    if let Some(session_id) = &session_uuid_result.session_id {
+        tracing::debug!(
+            session_id = %session_id,
+            source = %session_uuid_result.source,
+            original_value = ?session_uuid_result.original_value,
+            "Session UUID resolved"
+        );
+    }
 
     // 检查 KiroProvider 是否可用
     let provider = match &state.kiro_provider {
@@ -1613,6 +1739,7 @@ pub async fn post_messages_cc(
                 key_ctx: key_ctx.clone(),
                 model: payload.model.clone(),
                 is_stream: payload_stream,
+                session_id: session_uuid_result.session_id.clone(),
             },
         ));
         return super::websearch_loop::run_web_search_loop(
@@ -1713,6 +1840,7 @@ pub async fn post_messages_cc(
                 key_ctx: key_ctx.clone(),
                 model: payload.model.clone(),
                 is_stream: true,
+                session_id: session_uuid_result.session_id.clone(),
             },
         ));
         handle_stream_request_buffered(
@@ -1738,6 +1866,7 @@ pub async fn post_messages_cc(
                 key_ctx: key_ctx.clone(),
                 model: payload.model.clone(),
                 is_stream: false,
+                session_id: session_uuid_result.session_id.clone(),
             },
         ));
         handle_non_stream_request(

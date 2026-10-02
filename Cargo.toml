@@ -25,9 +25,11 @@ http = "1.0"
 httpdate = "1.0"
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.10", features = ["v1", "v4", "fast-rng"] }
+uuid = { version = "1.10", features = ["v1", "v4", "fast-rng", "serde"] }
 fastrand = "2"
 sha2 = "0.10"
+hmac = "0.12"       # HMAC-SHA256（内容派生 session ID）
+unicode-normalization = "0.1"  # Unicode NFC 规范化（内容派生）
 hex = "0.4"
 crc = "3"           # CRC32C 计算
 bytes = "1"         # 高效的字节缓冲区

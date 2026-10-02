@@ -29,6 +29,7 @@ mod middleware;
 mod openai;
 mod responses;
 mod router;
+pub mod session_uuid;
 pub mod stream;
 pub mod types;
 mod websearch;

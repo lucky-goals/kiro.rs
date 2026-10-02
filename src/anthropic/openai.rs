@@ -59,12 +59,18 @@ pub struct ChatCompletionRequest {
 }
 
 /// 从 OpenAI 请求体或会话亲和请求头中提取并规范化 Kiro 会话 UUID。
+///
+/// 优先级顺序（与 Python 仓库对齐）：
+/// 1. x-session-affinity (header)
+/// 2. x-client-request-id (header)
+/// 3. session_id (header)
+/// 4. x-claude-code-session-id (header) - Claude Code 专用
+/// 5. prompt_cache_key (body) - Codex CLI 专用
 pub(super) fn resolve_session_metadata(
     prompt_cache_key: Option<&str>,
     headers: &HeaderMap,
 ) -> Option<Metadata> {
     let candidates = [
-        prompt_cache_key,
         headers
             .get("x-session-affinity")
             .and_then(|value| value.to_str().ok()),
@@ -74,6 +80,10 @@ pub(super) fn resolve_session_metadata(
         headers
             .get("session_id")
             .and_then(|value| value.to_str().ok()),
+        headers
+            .get("x-claude-code-session-id")
+            .and_then(|value| value.to_str().ok()),
+        prompt_cache_key,
     ];
 
     candidates.into_iter().flatten().find_map(|candidate| {
@@ -114,7 +124,7 @@ pub async fn post_chat_completions(
     };
 
     // 2. 复用 Anthropic 全链路（内部强制非流式）
-    let inner = post_messages(State(state), Extension(key_ctx), Json(anthropic_req)).await;
+    let inner = post_messages(State(state), Extension(key_ctx), headers, Json(anthropic_req)).await;
 
     let status = inner.status();
     let body_bytes = match to_bytes(inner.into_body(), MAX_INNER_BODY).await {

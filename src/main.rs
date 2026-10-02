@@ -278,6 +278,27 @@ async fn main() {
     )));
     cache_meter.clone().spawn_background();
 
+    // SessionUuidStore：会话 UUID 映射存储（内存 + JSON 持久化）
+    let session_uuid_store = std::sync::Arc::new(
+        anthropic::session_uuid::SessionUuidStore::new(
+            cache_dir.join("session_uuid_map.json"),
+            2048, // 默认容量
+        ),
+    );
+
+    // 启动 SessionUuidStore 后台持久化任务（每 5 分钟保存一次）
+    {
+        let store = session_uuid_store.clone();
+        tokio::spawn(async move {
+            let interval = std::time::Duration::from_secs(300); // 5 分钟
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            loop {
+                store.persist();
+                tokio::time::sleep(interval).await;
+            }
+        });
+    }
+
     let anthropic_app = anthropic::create_router_with_shared_provider(
         Some(kiro_provider.clone()),
         config.extract_thinking,
@@ -287,6 +308,7 @@ async fn main() {
         Some(usage_aggregator.clone()),
         Some(cache_meter.clone()),
         trace_store.clone(),
+        Some(session_uuid_store),
     );
 
     // 构建 Admin API 路由（配置了非空 adminApiKey 时启用）
